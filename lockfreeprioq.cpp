@@ -50,7 +50,15 @@ public:
                 if (n == 1) {
                     if (CAS(tree, C, newCNode))
                         return;
-                    else 
+                    else {
+                        int p = parentIndex(n);
+                        int px = parentIndexX(p), py = parentIndexY(p, px);
+                        CMNode P = READ(tree[px][py]);
+                        if (value(P) <= value)
+                            if (DCSS(tree[x][y], C, newCNode, tree[px][py], P))
+                                return;
+                    }
+                    delete(newCNode.list);
                 }
             }
         }
@@ -87,7 +95,17 @@ public:
         return z - (1<<x) + 1;
     }
 
-    bool CAS(atomic<CMNode> tree, LNode C, LNode CP) {
+    bool CAS(atomic<CMNode> tree, CMNode C, CMNode CP) {
+        return tree.compare_exchange_strong(C, CP);
+    }
 
+    bool DCSS(atomic<CMNode> tree, CMNode C, CMNode CP, atomic<CMNode> par, CMNode P) {
+        return tree.
+    }
+
+    // I am separating out all atomic accesses into functions
+    // even a trivial one like this
+    T READ(atomic<CMNode> n) {
+        return n;
     }
 };
