@@ -74,7 +74,7 @@ public:
 
     //single integer position in tree
     int index(int x, int y) {
-        return pow(2, x) + y - 1;
+        return (1<<x) + y - 1;
     }
 
     //first index in tree
@@ -84,7 +84,7 @@ public:
 
     //second index in tree
     int indexY(int z, int x) {
-        return z - pow(2, x) + 1;
+        return z - (1<<x) + 1;
     }
 
     bool CAS(atomic<CMNode> tree, LNode C, LNode CP) {
