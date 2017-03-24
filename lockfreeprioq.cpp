@@ -54,11 +54,14 @@ public:
             int x = indexX(n), y = indexY(n, x);
             RealNode C = READ(tree[x][y]);
             if (value(C) >= value) {
-                int p = parentIndex(n);
-                int px = parentIndexX(p), py = parentIndexY(p, px);
-                RealNode* P = &(READ(tree[px][py]));
+                RealNode* P = NULL;
+                if (n != 1) {
+                    int p = parentIndex(n);
+                    int px = parentIndexX(p), py = parentIndexY(p, px);
+                    P = &(READ(tree[px][py]));
+                }
                 RealNode newNode = RealNode { new CMNode { new LNode { v, C.node->list }, C.node->dirty, C.node->c },
-                                              n == 1 ? NULL : P };
+                                              P };
                 if (n == 1) {
                     if (CAS(tree[x][y], &C, newNode))
                         return;
