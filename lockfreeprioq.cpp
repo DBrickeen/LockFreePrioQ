@@ -128,10 +128,6 @@ public:
     int indexY(int z, int x) {
         return z - (1<<x) + 1;
     }
-
-    // NOTE:  ALL compare-and-swaps are actually double-compare-and-swaps
-    // it's easier this way - you can do a single CAS by having the desired
-    // values identical to the expected
     
     // I guess I should point out right now that this still doesn't behave as desired
     // It will update an atomic struct for one node correctly and the pointer for its parent
@@ -145,6 +141,15 @@ public:
     // so when we modify a node, we actually do the DCAS properly
     // problem is, we lose the easy access of the array
     // it's certainly a thinker of a problem, i'll see if i can't figure it out
+    
+    // according to everything i've read, a pure DCAS function on two separate memory locations does not exist right now
+    // DWCAS exists, but that only works with tag pointers associated with a pointer.  it's not what i want, which is CAS
+    // on two separate memory locations at the same time
+    // all the things we've looked at (including what you linked me) are DWCAS, which isn't helpful for this data structure
+    // so the good news is, you can create a pseudo-DCAS through software to get the same results (though not the same runtime)
+    // this is explained in the paper cited by our mound paper, so it's apparently how they want this to be done
+    // since a pure DCAS is not hardware supported.
+    // i will try to get this implemented
     bool CAS(atomic<RealNode> tree, RealNode* C, RealNode CP) {
         return tree.compare_exchange_weak(C, CP);
     }
