@@ -3,6 +3,8 @@
 #include <atomic>
 using namespace std;
 
+// may need a compiler option that enforces the proper x86 cmpxch for DCAS
+
 template<typename T, T maxValue> class LockFreeMound {
 private:
     const unsigned int MAX_DEPTH = 16;
@@ -21,59 +23,88 @@ private:
         int c;        //counter - incremented on every update
     };
 
-    atomic<CMNode> tree[MAX_DEPTH][];
-    unsigned int depth;
+    //a true mound node, storing two pointers for DCAS
+    struct RealNode {
+        CMNode *node;   // our current mount node
+        RealNode *par;  // the parent of this node
+    };
+
+    atomic<RealNode> tree[MAX_DEPTH][];
+    atomic<int> depth;
 
 public:
     LockFreeMound() {
         //initialize tree
         //each second level array represents a level of the tree
         for (int i = 0; i < MAX_DEPTH; ++i) {
-            tree[i] = CMNode[1<<i];
+            tree[i] = RealNode[1<<i];
         }
 
-        tree[0][0] = CMNode { NULL, false, 0 };
+        tree[0][0] = RealNode { new CMNode { NULL, false, 0 }, NULL };
         depth = 1;
     }
 
-    T value(CMNode n) {
-        return n.list ? n.list->value : maxValue;
+    T value(RealNode n) {
+        return n.node->list ? n.node->list->value : maxValue;
     }
 
     void insert(T value) {
         while (true) {
             int n = findInsertPoint(value);
             int x = indexX(n), y = indexY(n, x);
-            CMNode C = READ(tree[x][y]);
-            if (C >= value) {
-                CNode<T>* newCNode = { new LNode<T> { v, tree[x][y].list }, C.dirty, c + 1 };
+            RealNode C = READ(tree[x][y]);
+            if (value(C) >= value) {
+                int p = parentIndex(n);
+                int px = parentIndexX(p), py = parentIndexY(p, px);
+                RealNode* P = &(READ(tree[px][py]));
+                RealNode newNode = RealNode { new CMNode { new LNode { v, C.node->list }, C.node->dirty, C.node->c },
+                                              n == 1 ? NULL : P };
                 if (n == 1) {
-                    if (CAS(tree, C, newCNode))
+                    if (CAS(tree[x][y], &C, newNode))
                         return;
-                    else {
-                        int p = parentIndex(n);
-                        int px = parentIndexX(p), py = parentIndexY(p, px);
-                        CMNode P = READ(tree[px][py]);
+                    else
                         if (value(P) <= value)
-                            if (DCSS(tree[x][y], C, newCNode, tree[px][py], P))
+                            if (CAS(tree[x][y], &C, newNode))
                                 return;
-                    }
-                    delete(newCNode.list);
+                    delete(newNode.node->list);
                 }
             }
         }
     }
 
     int findInsertPoint(T v) {
-
+        while (true) {
+            d = READ(depth);
+            for (int i = 0; i < THRESHOLD; ++i) {
+                int n = randLeaf(d);
+                if (value(leaf) >= v)
+                    return bs(leaf, 1, v);
+            }
+            depth.compare_exchange_weak(&d, d + 1);
+        }
     }
 
     int randLeaf() {
-
+        return (int) random.rand31_next() % (int) pow(2, depth - 1)
+            + (int) pow(2, depth - 1) - 1;
     }
 
     T extractMin() {
-
+        while (true) {
+            RealNode R = READ(tree[0][0]);
+            if (R.dirty) {
+                moundify(1);
+                continue;
+            }
+            if (R.list == NULL)
+                return maxValue;
+            if (CAS(tree[0][0], &R, RealNode { new CMNode { R.node->list->next, true, R.node->c + 1 }, R.par })) {
+                T retval = R.node->list.value;
+                delete(R.node->list);
+                moundify(1);
+                return retval;
+            }
+        }
     }
 
     void moundify(int n) {
@@ -95,17 +126,19 @@ public:
         return z - (1<<x) + 1;
     }
 
-    bool CAS(atomic<CMNode> tree, CMNode C, CMNode CP) {
-        return tree.compare_exchange_strong(C, CP);
+    // NOTE:  ALL compare-and-swaps are actually double-compare-and-swaps
+    // it's easier this way - you can do a single CAS by having the desired
+    // values identical to the expected
+    bool CAS(atomic<RealNode> tree, RealNode* C, RealNode CP) {
+        return tree.compare_exchange_weak(C, CP);
     }
 
-    bool DCSS(atomic<CMNode> tree, CMNode C, CMNode CP, atomic<CMNode> par, CMNode P) {
-        return tree.
-    }
-
-    // I am separating out all atomic accesses into functions
-    // even a trivial one like this
-    T READ(atomic<CMNode> n) {
+    RealNode READ(atomic<RealNode> n) {
         return n;
     }
+
+    int READ(atomic<int> n) {
+        return n;
+    }
+
 };
