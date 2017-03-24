@@ -95,11 +95,11 @@ public:
     T extractMin() {
         while (true) {
             RealNode R = READ(tree[0][0]);
-            if (R.dirty) {
+            if (R.node->dirty) {
                 moundify(1);
                 continue;
             }
-            if (R.list == NULL)
+            if (R.node->list == NULL)
                 return maxValue;
             if (CAS(tree[0][0], &R, RealNode { new CMNode { R.node->list->next, true, R.node->c + 1 }, R.par })) {
                 T retval = R.node->list.value;
