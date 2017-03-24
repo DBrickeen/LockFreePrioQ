@@ -132,6 +132,19 @@ public:
     // NOTE:  ALL compare-and-swaps are actually double-compare-and-swaps
     // it's easier this way - you can do a single CAS by having the desired
     // values identical to the expected
+    
+    // I guess I should point out right now that this still doesn't behave as desired
+    // It will update an atomic struct for one node correctly and the pointer for its parent
+    // but the actual parent node will remain unchanged
+    // we could propogate the change up but that is more runtime and may introduce weird race conditions
+    // basically the problem with all the DCAS implementations i find online is that they are performing it
+    // on a struct containing two pointers-sized variables, but one of them is just a small int
+    // i haven't yet found an implementation where they are actually modifying two separate memory locations at once
+    // which is what we really want to do here - we want to modify A[n] and A[n/2] with a DCAS
+    // i might know a solution to this where we redefine the array of nodes to be a real tree instead of array-based
+    // so when we modify a node, we actually do the DCAS properly
+    // problem is, we lose the easy access of the array
+    // it's certainly a thinker of a problem, i'll see if i can't figure it out
     bool CAS(atomic<RealNode> tree, RealNode* C, RealNode CP) {
         return tree.compare_exchange_weak(C, CP);
     }
