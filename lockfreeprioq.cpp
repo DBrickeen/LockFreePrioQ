@@ -99,6 +99,13 @@ public:
             depth.compare_exchange_weak(&d, d + 1);
         }
     }
+    
+    // note: this is not implemented yet
+    // the concurrent queue's implementation is not a binary search, it is linear
+    // so it won't get the proper runtime.
+    int bs(int bottom, int top, int v) {
+        
+    }
 
     int randLeaf() {
         return (int) random.rand31_next() % (int) pow(2, depth - 1)
