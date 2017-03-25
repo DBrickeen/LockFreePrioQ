@@ -2,9 +2,6 @@
 #include <math.h>
 #include <atomic>
 using namespace std;
-
-// may need a compiler option that enforces the proper x86 cmpxch for DCAS
-
 template<typename T, T maxValue> class LockFreeMound {
 private:
     const unsigned int MAX_DEPTH = 16;
@@ -17,19 +14,38 @@ private:
     };
 
     //concurrent mound node
+    //also doubles as the DCSS and DCAS descriptors
+    //because working with null pointers and trying to keep it safe was too much hassle
     struct CMNode {
         LNode* list;  //sorted list of values stored at this node
         bool dirty;   //true if mound property does not hold
         int c;        //counter - incremented on every update
+
+        bool isDCSS;  // flag to determine if this is a DCSS descriptor
+        bool isDCAS;  // flag to determine if this is a DCAS descriptor
+
+        atomic<CMNode>* a1;
+        CMNode *o1;
+        CMNode *n1;
+        atomic<CMNode>* a2;
+        CMNode *o2;
+        CMNode *n2;
+        int count;
+        atomic<CMNode>* status;
+        int check;
+        // 0 - UNDECIDED
+        // 1 - FAILED
+        // 2 - SUCCEEDED
+
+        bool operator==(const CMNode& r) const {
+            return list == r.list && dirt == r.dirty && c == r.c &&
+                   isDCSS == r.isDCSS && isDCAS == r.isDCAS && a1 == r.a1 &&
+                   o1 == r.o1 && n1 == r.n1 && a2 == r.a2 && o2 == r.o2 &&
+                   n2 == r.n2 && count == r.count && status == r.status && check == r.check;
+        }
     };
 
-    //a true mound node, storing two pointers for DCAS
-    struct RealNode {
-        CMNode *node;   // our current mount node
-        RealNode *par;  // the parent of this node
-    };
-
-    atomic<RealNode> tree[MAX_DEPTH][];
+    atomic<CMNode> tree[MAX_DEPTH][];
     atomic<int> depth;
 
 public:
@@ -37,39 +53,36 @@ public:
         //initialize tree
         //each second level array represents a level of the tree
         for (int i = 0; i < MAX_DEPTH; ++i) {
-            tree[i] = RealNode[1<<i];
+            tree[i] = CMNode[1<<i];
         }
 
-        tree[0][0] = RealNode { new CMNode { NULL, false, 0 }, NULL };
+        tree[0][0] = CMNode { NULL, false, 0, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0 };
         depth = 1;
     }
 
-    T value(RealNode n) {
-        return n.node->list ? n.node->list->value : maxValue;
+    T value(CMNode n) {
+        return n->list ? n->list->value : maxValue;
     }
 
     void insert(T value) {
         while (true) {
             int n = findInsertPoint(value);
             int x = indexX(n), y = indexY(n, x);
-            RealNode C = READ(tree[x][y]);
+            CMNode C = READ(tree[x][y]);
             if (value(C) >= value) {
-                RealNode* P = NULL;
-                if (n != 1) {
-                    int p = parentIndex(n);
-                    int px = parentIndexX(p), py = parentIndexY(p, px);
-                    P = &(READ(tree[px][py]));
-                }
-                RealNode newNode = RealNode { new CMNode { new LNode { v, C.node->list }, C.node->dirty, C.node->c },
-                                              P };
+                CMNode CP = CMNode { new LNode { v, C.list }, C.dirty, C.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0 };
                 if (n == 1) {
-                    if (CAS(tree[x][y], &C, newNode))
+                    if (tree[x][y].compare_exchange_weak(&C, CP))
                         return;
-                    else
+                    else {
+                        int p = parentIndex(n);
+                        int px = indexX(p), py = indexY(p, px);
+                        CMNode P = READ(tree[px][py]);
                         if (value(P) <= value)
-                            if (CAS(tree[x][y], &C, newNode))
+                            if (DCSS(buildDCSS1(tree[x] + y, &C, &newNode, tree[px] + py, &P)))
                                 return;
-                    delete(newNode.node->list);
+                    }
+                    delete(CP.list);
                 }
             }
         }
@@ -94,16 +107,16 @@ public:
 
     T extractMin() {
         while (true) {
-            RealNode R = READ(tree[0][0]);
-            if (R.node->dirty) {
+            CMNode R = READ(tree[0][0]);
+            if (R.dirty) {
                 moundify(1);
                 continue;
             }
-            if (R.node->list == NULL)
+            if (R.list == NULL)
                 return maxValue;
-            if (CAS(tree[0][0], &R, RealNode { new CMNode { R.node->list->next, true, R.node->c + 1 }, R.par })) {
-                T retval = R.node->list.value;
-                delete(R.node->list);
+            if (tree[0][0].compare_exchange_weak(&R, CMNode {R.list->next, true, R.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0})) {
+                T retval = R.list->value;
+                delete(R.list);
                 moundify(1);
                 return retval;
             }
@@ -111,7 +124,43 @@ public:
     }
 
     void moundify(int n) {
-
+        while (true) {
+            int x = indexX(n), y = indexY(n, x);
+            CMNode N = READ(tree[x][y]);
+            int d = READ(depth);
+            if (!N.dirty)
+                return;
+            if (n >= (1<<(d-1)) && n <= (1<<d) - 1)
+                return;
+            int lx = indexX(2 * n), ly = indexY(2 * n, lx);
+            CMNode L = READ(tree[lx][ly]);
+            int rx = indexX(2 * n + 1), ry = indexY(2 * n + 1, rx);
+            CMNode R = READ(tree[rx][ry]);
+            if (L.dirty) {
+                moundify(2 * n);
+                continue;
+            }
+            if (R.dirty) {
+                moundify(2 * n + 1);
+                continue;
+            }
+            if (value(L) <= value(R) && value(L) < value(N)) {
+                if (DCAS(buildDCAS(tree[x] + y, &N, new CMNode {L.list, false, N.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0 },
+                                   tree[lx] + ly, &L, new CMNode {N.list, true, L.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0 }))) {
+                    moundify(2 * n);
+                    return;
+                }
+            }
+            else if (value(R) < value(L) && value(R) < value(N)) {
+                if (DCAS(buildDCAS(tree[x] + y, &N, new CMNode {R.list, false, N.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0},
+                                   tree[rx] + ry, &R, new CMNode {N.list, true, R.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0}))) {
+                    moundify(2 * n + 1);
+                    return;
+                }
+            }
+            else if (tree[x][y].compare_exchange_weak(&N, CMNode {N.list, false, N.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0}))
+                return;
+        }
     }
 
     //single integer position in tree
@@ -128,33 +177,77 @@ public:
     int indexY(int z, int x) {
         return z - (1<<x) + 1;
     }
-    
-    // I guess I should point out right now that this still doesn't behave as desired
-    // It will update an atomic struct for one node correctly and the pointer for its parent
-    // but the actual parent node will remain unchanged
-    // we could propogate the change up but that is more runtime and may introduce weird race conditions
-    // basically the problem with all the DCAS implementations i find online is that they are performing it
-    // on a struct containing two pointers-sized variables, but one of them is just a small int
-    // i haven't yet found an implementation where they are actually modifying two separate memory locations at once
-    // which is what we really want to do here - we want to modify A[n] and A[n/2] with a DCAS
-    // i might know a solution to this where we redefine the array of nodes to be a real tree instead of array-based
-    // so when we modify a node, we actually do the DCAS properly
-    // problem is, we lose the easy access of the array
-    // it's certainly a thinker of a problem, i'll see if i can't figure it out
-    
-    // according to everything i've read, a pure DCAS function on two separate memory locations does not exist right now
-    // DWCAS exists, but that only works with tag pointers associated with a pointer.  it's not what i want, which is CAS
-    // on two separate memory locations at the same time
-    // all the things we've looked at (including what you linked me) are DWCAS, which isn't helpful for this data structure
-    // so the good news is, you can create a pseudo-DCAS through software to get the same results (though not the same runtime)
-    // this is explained in the paper cited by our mound paper, so it's apparently how they want this to be done
-    // since a pure DCAS is not hardware supported.
-    // i will try to get this implemented
-    bool CAS(atomic<RealNode> tree, RealNode* C, RealNode CP) {
-        return tree.compare_exchange_weak(C, CP);
+
+    // basing the DCSS and DCAS operations on the article:
+    // "A Practical Multi-word Compare-and-Swap Operation"
+    // by Harris, Fraser, and Pratt
+    CMNode* CAS(atomic<CMNode>* tree, CMNode *C, CMNode CP) {
+        if (tree->compare_exchange_weak(C, CP))
+            return C;
+        return C;
     }
 
-    RealNode READ(atomic<RealNode> n) {
+    CMNode* DCSS(CMNode *d) {
+        CMNode *r;
+        do {
+            r = CAS(d->a2, d->o2, *d);
+            if (r && r->isDCSS)
+                Complete(r);
+        } while (r && r->isDCSS);
+        if (r == *(d->o2))
+            Complete(d);
+        return r;
+    }
+
+    void Complete(CMNode *d) {
+        CMNode v = READ(*(d->a1));
+        if (v == *(d->o1))
+            CAS(d->a2, d, *(d->n2));
+        else
+            CAS(d->a2, d, *(d->o2));
+    }
+
+    bool DCAS(CMNode* cd) {
+        int status = 0;
+        if (READ(*(cd->status)).check == 0) {
+            status = 2;
+            for (int i = 0; i < 2 && status == 2; ++i) {
+                CMNode* val = DCSS(buildDCSS2(cd->status, buildStat(0), i ? cd->a2 : cd->a1, i ? cd->o2 : cd->o1, cd));
+                if (val->isDCAS) {
+                    if (val != cd) {
+                        DCAS(val);
+                        i--;
+                    }
+                }
+                else if (val != i ? cd->o2 : cd->o1)
+                    status = 1;
+            }
+            CAS(cd->status, buildStat(0), buildStat(status));
+        }
+        bool succeeded = (READ(*(cd->status)).check == 2);
+        for (i = 0; i < 2; ++i)
+            CAS(i ? cd->a2 : cd->a1, cd, succeeded ? i ? *(cd->n2) : *(cd->n1) : i ? *(cd->o2) : *(cd->o1));
+        return succeeded;
+    }
+
+    CMNode* buildDCSS1(atomic<CMNode>* a2, CMNode* o2, CMNode* n2, atomic<CMNode>* a1, CMNode* o1) {
+        return new CMNode { NULL, false, 0, true, false, a1, o1, NULL, a2, o2, n2, 0, NULL, 0 };
+    }
+
+    CMNode* buildDCSS2(atomic<CMNode>* a1, CMNode* o1, atomic<CMNode>* a2, CMNode *o2, CMNode* n2) {
+        return new CMNode { NULL, false, 0, true, false, a1, o1, NULL, a2, o2, n2, 0, NULL, 0 };
+    }
+
+    CMNode* buildDCAS(atomic<CMNode>* a1, CMNode* o1, CMNode* n1, atomic<CMNode>* a2, CMNode *o2, CMNode *n2) {
+        atomic<CMNode>* temp = new CMNode { NULL, false, 0, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0};
+        return new CMNode { NULL, false, 0, false, true, a1, o1, n1, a2, o2, n2, 0, temp, 0 };
+    }
+
+    CMNode* buildStat(int n) {
+        return new CMNode { NULL, false, 0, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, n };
+    }
+
+    CMNode READ(atomic<CMNode> n) {
         return n;
     }
 
