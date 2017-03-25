@@ -188,6 +188,9 @@ public:
     // basing the DCSS and DCAS operations on the article:
     // "A Practical Multi-word Compare-and-Swap Operation"
     // by Harris, Fraser, and Pratt
+    
+    // i just realized i forgot to implement the DCSSRead and DCASRead functions (these are actually important to make it lock-free)
+    // they aren't very difficult to implement compared to what's already here, i'll throw it in soon
     CMNode* CAS(atomic<CMNode>* tree, CMNode *C, CMNode CP) {
         if (tree->compare_exchange_weak(C, CP))
             return C;
