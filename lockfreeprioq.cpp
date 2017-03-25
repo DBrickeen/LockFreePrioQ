@@ -130,31 +130,31 @@ public:
             int d = READ(depth);
             if (!N.dirty)
                 return;
-            if (n >= (1<<(d-1)) && n <= (1<<d) - 1)
+            if (n >= (1<<(d-1)) - 1)
                 return;
-            int lx = indexX(2 * n), ly = indexY(2 * n, lx);
+            int lx = indexX(2 * n + 1), ly = indexY(2 * n + 1, lx);
             CMNode L = READ(tree[lx][ly]);
-            int rx = indexX(2 * n + 1), ry = indexY(2 * n + 1, rx);
+            int rx = indexX(2 * n + 2), ry = indexY(2 * n + 2, rx);
             CMNode R = READ(tree[rx][ry]);
             if (L.dirty) {
-                moundify(2 * n);
+                moundify(2 * n + 1);
                 continue;
             }
             if (R.dirty) {
-                moundify(2 * n + 1);
+                moundify(2 * n + 2);
                 continue;
             }
             if (value(L) <= value(R) && value(L) < value(N)) {
                 if (DCAS(buildDCAS(tree[x] + y, &N, new CMNode {L.list, false, N.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0 },
                                    tree[lx] + ly, &L, new CMNode {N.list, true, L.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0 }))) {
-                    moundify(2 * n);
+                    moundify(2 * n + 1);
                     return;
                 }
             }
             else if (value(R) < value(L) && value(R) < value(N)) {
                 if (DCAS(buildDCAS(tree[x] + y, &N, new CMNode {R.list, false, N.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0},
                                    tree[rx] + ry, &R, new CMNode {N.list, true, R.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0}))) {
-                    moundify(2 * n + 1);
+                    moundify(2 * n + 2);
                     return;
                 }
             }
