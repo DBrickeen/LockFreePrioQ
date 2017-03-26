@@ -112,11 +112,12 @@ public class prioq<T extends Comparable<T>> {
 				   count == N.count && c == N.c && dirty == N.dirty;
 		}
 	}
-	prioq() {
+	prioq(T m) {
 		tree = new AtomicReference[1<<16];
 		tree[0] = new AtomicReference<CMNode>(new CMNode());
 		depth.set(1);
 		r = new Random();
+		max = m;
 	}
 	CMNode copy(CMNode N) {
 		if (N == null)
