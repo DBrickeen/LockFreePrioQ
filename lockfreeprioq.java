@@ -273,10 +273,10 @@ public class prioq<T extends Comparable<T>> {
 	}
 	void Complete(CMNode d) {
 		CMNode v = d.a1.get();
-	if (v == d.o1)
-		d.a2.compareAndSet(d, d.n2);
-	else
-		d.a2.compareAndSet(d, d.o2);
+		if (v == d.o1)
+			d.a2.compareAndSet(d, d.n2);
+		else
+			d.a2.compareAndSet(d, d.o2);
 	}
 	boolean DCAS(CMNode d) {
 		int status = 0;
