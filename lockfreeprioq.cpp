@@ -1,6 +1,9 @@
 #include <iostream>
 #include <math.h>
 #include <atomic>
+#include <random>
+#include <cmath>
+#include <ctime>
 using namespace std;
 template<typename T, T maxValue> class LockFreeMound {
 private:
@@ -38,26 +41,24 @@ private:
         // 2 - SUCCEEDED
 
         bool operator==(const CMNode& r) const {
-            return list == r.list && dirt == r.dirty && c == r.c &&
+            return list == r.list && dirty == r.dirty && c == r.c &&
                    isDCSS == r.isDCSS && isDCAS == r.isDCAS && a1 == r.a1 &&
                    o1 == r.o1 && n1 == r.n1 && a2 == r.a2 && o2 == r.o2 &&
                    n2 == r.n2 && count == r.count && status == r.status && check == r.check;
         }
     };
 
-    atomic<CMNode> tree[MAX_DEPTH][];
+    atomic<CMNode> tree[16][1<<16];
     atomic<int> depth;
 
 public:
     LockFreeMound() {
         //initialize tree
         //each second level array represents a level of the tree
-        for (int i = 0; i < MAX_DEPTH; ++i) {
-            tree[i] = CMNode[1<<i];
-        }
 
         tree[0][0] = CMNode { NULL, false, 0, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0 };
         depth = 1;
+        srand(time(0));
     }
 
     T value(CMNode n) {
@@ -68,19 +69,24 @@ public:
         while (true) {
             int n = findInsertPoint(value);
             int x = indexX(n), y = indexY(n, x);
-            CMNode C = READ(tree[x][y]);
-            if (value(C) >= value) {
-                CMNode CP = CMNode { new LNode { v, C.list }, C.dirty, C.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0 };
+            CMNode* C = DCASRead(tree[x] + y);
+            if (value(*C) >= value) {
+                CMNode CP = CMNode { new LNode { value, C->list }, C->dirty, C->c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0 };
                 if (n == 1) {
-                    if (tree[x][y].compare_exchange_weak(&C, CP))
+                    if (tree[x][y].compare_exchange_weak(C, CP))
                         return;
                     else {
-                        int p = parentIndex(n);
+                        int p = (n - 1) / 2;
                         int px = indexX(p), py = indexY(p, px);
-                        CMNode P = READ(tree[px][py]);
-                        if (value(P) <= value)
-                            if (DCSS(buildDCSS1(tree[x] + y, &C, &newNode, tree[px] + py, &P)))
+                        CMNode* P = DCASRead(tree[px] + py);
+                        if (value(*P) <= value) {
+                            CMNode* desc = buildDCSS1(tree[x] + y, C, &CP, tree[px] + py, P);
+                            if (DCSS(desc)) {
+                                delete(desc);
                                 return;
+                            }
+                            delete(desc);
+                        }
                     }
                     delete(CP.list);
                 }
@@ -90,40 +96,44 @@ public:
 
     int findInsertPoint(T v) {
         while (true) {
-            d = READ(depth);
+            int d = READ(depth);
             for (int i = 0; i < THRESHOLD; ++i) {
                 int n = randLeaf(d);
-                if (value(leaf) >= v)
-                    return bs(leaf, 1, v);
+                if (value(n) >= v)
+                    return bs(n, v);
             }
-            depth.compare_exchange_weak(&d, d + 1);
+            atomic_compare_exchange_weak(&depth, &d, d + 1);
         }
     }
-    
-    // note: this is not implemented yet
-    // the concurrent queue's implementation is not a binary search, it is linear
-    // so it won't get the proper runtime.
-    int bs(int bottom, int top, int v) {
-        
+
+    // i realized this actually is log(n) runtime, i kept thinking we needed log(log(n)) (which is doable but unnecessary)
+    int bs(int n, int v) {
+        if (n == 0)
+            return n;
+        int p = (n - 1) / 2;
+        int px = indexX(p), py = indexY(p, px);
+        if (value(tree[px][py]) < v)
+            return n;
+        return bs(p, v);
     }
 
     int randLeaf() {
-        return (int) random.rand31_next() % (int) pow(2, depth - 1)
+        return (int) rand() % (int) pow(2, depth - 1)
             + (int) pow(2, depth - 1) - 1;
     }
 
     T extractMin() {
         while (true) {
-            CMNode R = READ(tree[0][0]);
-            if (R.dirty) {
+            CMNode* R = DCASRead(tree[0] + 0);
+            if (R->dirty) {
                 moundify(1);
                 continue;
             }
-            if (R.list == NULL)
+            if (R->list == NULL)
                 return maxValue;
-            if (tree[0][0].compare_exchange_weak(&R, CMNode {R.list->next, true, R.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0})) {
-                T retval = R.list->value;
-                delete(R.list);
+            if (tree[0][0].compare_exchange_weak(R, CMNode {R->list->next, true, R->c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0})) {
+                T retval = R->list->value;
+                delete(R->list);
                 moundify(1);
                 return retval;
             }
@@ -133,39 +143,49 @@ public:
     void moundify(int n) {
         while (true) {
             int x = indexX(n), y = indexY(n, x);
-            CMNode N = READ(tree[x][y]);
+            CMNode* N = DCASRead(tree[x] + y);
             int d = READ(depth);
-            if (!N.dirty)
+            if (!N->dirty)
                 return;
-            if (n >= (1<<(d-1)) - 1)
+            if (n >= (1<<(d-1)) && n <= (1<<d) - 1)
                 return;
-            int lx = indexX(2 * n + 1), ly = indexY(2 * n + 1, lx);
-            CMNode L = READ(tree[lx][ly]);
-            int rx = indexX(2 * n + 2), ry = indexY(2 * n + 2, rx);
-            CMNode R = READ(tree[rx][ry]);
-            if (L.dirty) {
+            int lx = indexX(2 * n), ly = indexY(2 * n, lx);
+            CMNode* L = DCASRead(tree[lx] + ly);
+            int rx = indexX(2 * n + 1), ry = indexY(2 * n + 1, rx);
+            CMNode* R = DCASRead(tree[rx] + ry);
+            if (L->dirty) {
+                moundify(2 * n);
+                continue;
+            }
+            if (R->dirty) {
                 moundify(2 * n + 1);
                 continue;
             }
-            if (R.dirty) {
-                moundify(2 * n + 2);
-                continue;
+            if (value(*L) <= value(*R) && value(*L) < value(*N)) {
+                CMNode* desc = buildDCAS(tree[x] + y, N, new CMNode {L->list, false, N->c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0 },
+                                   tree[lx] + ly, L, new CMNode {N->list, true, L->c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0 });
+                if (DCAS(desc)) {
+                    delete(desc->status);
+                    delete(desc->n1);
+                    delete(desc->n2);
+                    delete(desc);
+                    moundify(2 * n);
+                    return;
+                }
             }
-            if (value(L) <= value(R) && value(L) < value(N)) {
-                if (DCAS(buildDCAS(tree[x] + y, &N, new CMNode {L.list, false, N.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0 },
-                                   tree[lx] + ly, &L, new CMNode {N.list, true, L.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0 }))) {
+            else if (value(*R) < value(*L) && value(*R) < value(*N)) {
+                CMNode* desc = buildDCAS(tree[x] + y, N, new CMNode {R->list, false, N->c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0},
+                                   tree[rx] + ry, R, new CMNode {N->list, true, R->c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0});
+                if (DCAS(desc)) {
+                    delete(desc->status);
+                    delete(desc->n1);
+                    delete(desc->n2);
+                    delete(desc);
                     moundify(2 * n + 1);
                     return;
                 }
             }
-            else if (value(R) < value(L) && value(R) < value(N)) {
-                if (DCAS(buildDCAS(tree[x] + y, &N, new CMNode {R.list, false, N.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0},
-                                   tree[rx] + ry, &R, new CMNode {N.list, true, R.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0}))) {
-                    moundify(2 * n + 2);
-                    return;
-                }
-            }
-            else if (tree[x][y].compare_exchange_weak(&N, CMNode {N.list, false, N.c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0}))
+            else if (tree[x][y].compare_exchange_weak(N, CMNode {N->list, false, N->c + 1, false, false, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0}))
                 return;
         }
     }
@@ -188,9 +208,6 @@ public:
     // basing the DCSS and DCAS operations on the article:
     // "A Practical Multi-word Compare-and-Swap Operation"
     // by Harris, Fraser, and Pratt
-    
-    // i just realized i forgot to implement the DCSSRead and DCASRead functions (these are actually important to make it lock-free)
-    // they aren't very difficult to implement compared to what's already here, i'll throw it in soon
     CMNode* CAS(atomic<CMNode>* tree, CMNode *C, CMNode CP) {
         if (tree->compare_exchange_weak(C, CP))
             return C;
@@ -198,7 +215,7 @@ public:
     }
 
     CMNode* DCSS(CMNode *d) {
-        CMNode *r;
+        CMNode *r = NULL;
         do {
             r = CAS(d->a2, d->o2, *d);
             if (r && r->isDCSS)
@@ -206,6 +223,15 @@ public:
         } while (r && r->isDCSS);
         if (r == *(d->o2))
             Complete(d);
+        return r;
+    }
+
+    CMNode* DCSSRead(CMNode* d) {
+        CMNode* r = NULL;
+        do {
+            r = CAS(d->a2, d->o2, *d);
+            if (r && r->isDCSS) Complete(r);
+        } while (r && r->isDCSS);
         return r;
     }
 
@@ -235,9 +261,18 @@ public:
             CAS(cd->status, buildStat(0), buildStat(status));
         }
         bool succeeded = (READ(*(cd->status)).check == 2);
-        for (i = 0; i < 2; ++i)
+        for (int i = 0; i < 2; ++i)
             CAS(i ? cd->a2 : cd->a1, cd, succeeded ? i ? *(cd->n2) : *(cd->n1) : i ? *(cd->o2) : *(cd->o1));
         return succeeded;
+    }
+
+    CMNode* DCASRead(CMNode* addr) {
+        CMNode* r = NULL;
+        do {
+            r = DCSSRead(addr);
+            if (r && r->isDCAS) DCAS(r);
+        } while (r && r->isDCAS);
+        return r;
     }
 
     CMNode* buildDCSS1(atomic<CMNode>* a2, CMNode* o2, CMNode* n2, atomic<CMNode>* a1, CMNode* o1) {
