@@ -9,7 +9,6 @@ public class prioq<T extends Comparable<T>> {
 		Stack<T> list;
 		boolean dirty;
 		int c;
-		
 		boolean isDCSS;
 		boolean isDCAS;
 		AtomicReference<CMNode> a1;
@@ -113,7 +112,7 @@ public class prioq<T extends Comparable<T>> {
 		}
 	}
 	prioq(T m) {
-		tree = new AtomicReference[1<<16];
+		tree = new AtomicReference[16 * (1<<16)];
 		tree[0] = new AtomicReference<CMNode>(new CMNode());
 		depth.set(1);
 		r = new Random();
