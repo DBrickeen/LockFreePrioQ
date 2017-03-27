@@ -1,6 +1,5 @@
 import java.util.*;
 import java.util.concurrent.atomic.*;
-import java.io.*;
 public class prioq<T extends Comparable<T>> {
 	AtomicReference<CMNode>[] tree;
 	AtomicInteger depth;
