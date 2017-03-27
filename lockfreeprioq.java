@@ -7,8 +7,16 @@ public class prioq<T extends Comparable<T>> {
 	Random r;
 	T max;
 	CMNode undecide, failed, success;
+	class LNode {
+		T val;
+		LNode next;
+		LNode(T v, LNode l) {
+			val = v;
+			next = l;
+		}
+	}
 	class CMNode {
-		Stack<T> list;
+		LNode list;
 		boolean dirty;
 		int c;
 		boolean isDCSS;
@@ -74,7 +82,7 @@ public class prioq<T extends Comparable<T>> {
 			n2 = N.n2;
 			isDCSS = N.isDCSS;
 			isDCAS = N.isDCAS;
-			list = (Stack<T>) N.list.clone();
+			list = N.list;
 			status = N.status;
 			c = N.c;
 			check = N.check;
@@ -83,7 +91,7 @@ public class prioq<T extends Comparable<T>> {
 		}
 		CMNode() {
 			dirty = false;
-			list = new Stack<T>();
+			list = null;
 			c = 0;
 			a1 = null;
 			o1 = null;
@@ -110,7 +118,7 @@ public class prioq<T extends Comparable<T>> {
 		success = new CMNode(2);
 	}
 	T getval(CMNode n) {
-		return n == null || n.list == null || n.list.isEmpty() ? max : n.list.peek();
+		return n.list == null ? max : n.list.val;
 	}
 	void insert(T val) {
 		while (true) {
@@ -118,7 +126,7 @@ public class prioq<T extends Comparable<T>> {
 			CMNode C = Read(tree[n].get());
 			if (getval(C).compareTo(val) >= 0) {
 				CMNode CP = new CMNode(C);
-				CP.list.push(val);
+				CP.list = new LNode(val, CP.list);
 				CP.c++;
 				if (n == 0) {
 					if (tree[n].compareAndSet(C, CP))
@@ -177,14 +185,14 @@ public class prioq<T extends Comparable<T>> {
 				moundify(0);
 				continue;
 			}
-			if (R.list.isEmpty())
+			if (R.list == null)
 				return max;
 			CMNode RP = new CMNode(R);
-			RP.list.pop();
+			RP.list = RP.list.next;
 			RP.dirty = true;
 			RP.c++;
 			if (tree[0].compareAndSet(R, RP)) {
-				T ret = R.list.peek();
+				T ret = R.list.val;
 				moundify(0);
 				return ret;
 			}
