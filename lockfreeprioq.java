@@ -1,9 +1,8 @@
-import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.*;
 public class prioq<T extends Comparable<T>> {
 	AtomicReference<CMNode>[] tree;
 	AtomicInteger depth;
-	Random r;
 	T max;
 	CMNode undecide, failed, success;
 	class LNode {
@@ -110,7 +109,6 @@ public class prioq<T extends Comparable<T>> {
 		for (int i = 0; i < tree.length; ++i)
 			tree[i] = new AtomicReference<CMNode>(new CMNode());
 		depth = new AtomicInteger(0);
-		r = new Random();
 		max = m;
 		undecide = new CMNode(0);
 		failed = new CMNode(1);
@@ -169,7 +167,8 @@ public class prioq<T extends Comparable<T>> {
 			return 0;
 		int lo = (1<<d) - 1;
 		int hi = ((1<<(d + 1)) - 1);
-		return lo + (Math.abs(r.nextInt()) % (hi - lo));
+		int r = ThreadLocalRandom.current().nextInt();
+		return lo + (Math.abs(r) % (hi - lo));
 	}
 	boolean isLeaf(int d, int n) {
 		if (d == 0)
